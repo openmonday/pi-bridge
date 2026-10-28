@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { Lexer } from "marked";
+import { Lexer, type Tokens } from "marked";
 import { bilingual, needsTranslation, protect, safeTranslation, segments } from "../src/core/index.ts";
 
 test("preserves prose containers and skips code, tables, and math", () => {
@@ -63,4 +63,11 @@ test("keeps inline Markdown in translations", () => {
     () => "使用 **run** 命令和 `npm test`,参见 [文档](https://x.dev)。");
   const inline = (Lexer.lex(output).at(-1) as any).tokens.map((t: any) => t.type);
   assert.ok(inline.includes("strong") && inline.includes("codespan") && inline.includes("link"), inline.join());
+});
+
+test("leading inline markers in Chinese translations still render", () => {
+  for (const text of ["**注意** 这是重点", "*强调*文字", "~~删除~~文字", "`code`是代码"]) {
+    const inline = Lexer.lex(bilingual("Hello", () => text)).filter(t => t.type === "paragraph")[1] as Tokens.Paragraph;
+    assert.ok(inline.tokens.some(t => ["strong", "em", "del", "codespan"].includes(t.type)), text);
+  }
 });

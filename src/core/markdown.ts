@@ -118,7 +118,10 @@ export function safeTranslation(text: string): string {
     .trim()
     .replace(/</g, "\\<")
     .replace(/^(\d+)([.)])/, "$1\\$2")
-    .replace(/^([#>*+\-=_|~`])/, "\\$1");
+    // Escape only real block openers; inline openers like `**bold**`, `*em*`,
+    // `~~del~~` and `code` at the start must keep rendering.
+    .replace(/^(?:([#>|=])|([-+*])(?=\s|$)|((?:[-*_][ \t]*){3,}$)|(`{3,}|~{3,}))/, (m, a, b, c, d) =>
+      a ? `\\${m}` : b ? `\\${m}` : c ? `\\${m}` : `\\${m[0]}${m.slice(1)}`);
 }
 
 export function bilingual(markdown: string, lookup: (text: string) => string | undefined, streaming = false): string {
