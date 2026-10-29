@@ -22,6 +22,7 @@ or run `pi install git:github.com/openmonday/pi-bridge.git`. Requires pi 1.3.0 o
 | --- | --- |
 | `Alt+A` | Show or hide the translation of the last assistant reply |
 | `Alt+S` | Translate the current draft to English in place, without sending |
+| `Alt+T` | Turn auto-send on or off: while on, `Enter` translates the draft and sends it |
 | `Cmd+Z` | Undo, including a draft translation; pi's own undo bindings remain |
 | Select + right-click | Translate the selection in a floating card (macOS only, see below) |
 
@@ -53,13 +54,18 @@ Platform limits:
 - Streaming translation waits for complete top-level blocks. Blocks over 4000 characters are skipped.
 - Code blocks, tables, raw HTML, and display math are not translated. Inline code, math, links, and HTML tags are protected with placeholders.
 - If a translation fails, the original stays and a warning is shown. Toggle `Alt+A` off and on to retry.
+- With auto-send on (`Alt+T`), `Enter` translates the draft to English first and then sends the
+  translated text, so you can type in any language without pressing `Alt+S` first. Slash commands
+  and `!` bash lines are sent untranslated. `Escape` cancels a translation that is still running and
+  keeps your draft; if you edit the draft while it translates, nothing is sent and the draft is kept.
+  `Shift+Enter` and `Ctrl+J` still insert a newline.
 - Interactive TUI only. RPC, JSON, and print modes are untouched.
 
 ## Data and privacy
 
 Settings and the translation cache live in `~/.pi/agent/pi-bridge/`:
 
-- `settings.json`: `target` (default `zh-Hans`), `source` (default `auto`), `streaming`
+- `settings.json`: `target` (default `zh-Hans`), `source` (default `auto`), `streaming`, `autoSend`
 - `cache/<session-id>.json`: up to 3000 entries per session
 
 Text being translated is sent to Microsoft through the Bing web translator. It needs no API key, but has no stable contract.

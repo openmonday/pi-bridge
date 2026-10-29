@@ -1,4 +1,4 @@
-import { Loader, truncateToWidth, visibleWidth, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
+import { Loader, getKeybindings, matchesKey, truncateToWidth, visibleWidth, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
 import { CustomEditor, type ExtensionUIContext, type KeybindingsManager } from "@earendil-works/pi-coding-agent";
 
 export type BridgeEditorFactory = NonNullable<Parameters<ExtensionUIContext["setEditorComponent"]>[0]>;
@@ -34,10 +34,40 @@ class TranslationIndicator extends Loader {
 export class TranslationEditor extends CustomEditor {
   private readonly indicator: TranslationIndicator;
   private translation: string | undefined;
+  /** Called on Enter for a non-empty draft. Return true to consume the key instead of submitting. */
+  interceptSubmit?: (draft: string) => boolean;
+  /** Called on Escape. Return true to consume the key, e.g. to cancel an in-flight auto-send. */
+  interceptEscape?: () => boolean;
 
   constructor(tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) {
     super(tui, theme, keybindings, { embedWorkingStatus: true });
     this.indicator = new TranslationIndicator(tui, text => this.borderColor(text));
+  }
+
+  handleInput(data: string): void {
+    if (this.interceptEscape && matchesKey(data, "escape") && !this.isShowingAutocomplete() && this.interceptEscape()) return;
+    if (this.interceptSubmit && this.claimsSubmit(data) && this.interceptSubmit(this.getExpandedText())) return;
+    super.handleInput(data);
+  }
+
+  // Mirrors Editor's submit guards: submits disabled, autocomplete open, the
+  // submit key itself, the backslash-newline escape, and an empty draft.
+  private claimsSubmit(data: string): boolean {
+    if (this.disableSubmit || this.isShowingAutocomplete()) return false;
+    const kb = getKeybindings();
+    if (!kb.matches(data, "tui.input.submit")) return false;
+    if (this.backslashNewline(data, kb)) return false;
+    return this.getExpandedText().trim().length > 0;
+  }
+
+  // Same workaround as Editor: with Shift+Enter bound to newline, a trailing
+  // backslash before Enter inserts a newline instead of submitting.
+  private backslashNewline(data: string, kb: ReturnType<typeof getKeybindings>): boolean {
+    if (!matchesKey(data, "enter")) return false;
+    const keys = kb.getKeys("tui.input.submit");
+    if (!keys.includes("shift+enter") && !keys.includes("shift+return")) return false;
+    const { line, col } = this.getCursor();
+    return col > 0 && (this.getLines()[line] ?? "")[col - 1] === "\\";
   }
 
   setTranslation(message?: string) {

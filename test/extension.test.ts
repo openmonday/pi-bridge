@@ -83,7 +83,7 @@ test("shortcuts translate only the last reply, toggle off, and preserve draft ed
       setEditorComponent(factory: any) {
         editorView?.dispose();
         editorFactory = factory;
-        editorView = factory ? factory(widgetTui, getEditorTheme(), {}) : undefined;
+        editorView = factory ? factory(widgetTui, getEditorTheme(), getKeybindings()) : undefined;
       },
       getEditorText: () => draft,
       setEditorText(text: string) { draft = text; },
@@ -102,7 +102,7 @@ test("shortcuts translate only the last reply, toggle off, and preserve draft ed
   await handlers.get("session_start")!({ reason: "startup" }, ctx);
   t.after(() => handlers.get("session_shutdown")!({}, ctx));
   const press = (key: string) => keys.get(key)!(ctx);
-  assert.deepEqual([...keys.keys()], ["alt+a", "alt+s"]);
+  assert.deepEqual([...keys.keys()], ["alt+a", "alt+t", "alt+s"]);
   assert.deepEqual(commands, []);
   const original = "Explain this error.";
   const message = { role: "assistant", content: [{ type: "text", text: original }], stopReason: "stop" };
@@ -142,6 +142,61 @@ test("shortcuts translate only the last reply, toggle off, and preserve draft ed
   assert.equal(draft, "New draft");
   assert.ok(notifications.some(text => text.includes("Draft changed")));
   await until(() => !progressText().includes("Translating"));
+
+  // Enter is a plain submit until auto-send is turned on.
+  let submitted: string[] = [];
+  editorView.onSubmit = (text: string) => submitted.push(text);
+  draft = "Explain this error.";
+  editorView.setText(draft);
+  editorView.handleInput("\r");
+  assert.deepEqual(submitted, ["Explain this error."]);
+  submitted = [];
+
+  await press(shortcuts.autoSend);
+  assert.equal(JSON.parse(await readFile(join(directory, "settings.json"), "utf8")).autoSend, true);
+  assert.ok(notifications.some(text => text.includes("Enter now translates")));
+  draft = "Por favor, explica este error.";
+  editorView.setText(draft);
+  editorView.handleInput("\r");
+  await until(() => submitted.length === 1);
+  assert.deepEqual(submitted, ["Please explain this error."]);
+  assert.equal(editorView.getExpandedText(), "");
+
+  // Auto-send leaves slash commands and bash lines alone.
+  submitted = [];
+  editorView.setText("/hotkeys");
+  editorView.handleInput("\r");
+  assert.deepEqual(submitted, ["/hotkeys"]);
+  submitted = [];
+
+  // Editing mid-translation keeps the draft and sends nothing.
+  let releaseEdit!: () => void;
+  inputGate = new Promise<void>(resolve => { releaseEdit = resolve; });
+  editorView.setText("¿Qué es esto?");
+  editorView.handleInput("\r");
+  await until(() => progressText().includes("Translating draft, then sending"));
+  editorView.setText("¿Qué es esto? (edited)");
+  releaseEdit();
+  await until(() => !progressText().includes("Translating"));
+  assert.deepEqual(submitted, []);
+  assert.equal(editorView.getExpandedText(), "¿Qué es esto? (edited)");
+  assert.ok(notifications.some(text => text.includes("Draft changed while translating")));
+  submitted = [];
+
+  // Escape cancels a pending auto-send and keeps the draft.
+  let cancel!: () => void;
+  inputGate = new Promise<void>(resolve => { cancel = resolve; });
+  editorView.setText("Otra pregunta.");
+  editorView.handleInput("\r");
+  await until(() => progressText().includes("Translating draft, then sending"));
+  editorView.handleInput("\x1b");
+  cancel();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.deepEqual(submitted, []);
+  assert.equal(editorView.getExpandedText(), "Otra pregunta.");
+  await press(shortcuts.autoSend);
+  assert.equal(JSON.parse(await readFile(join(directory, "settings.json"), "utf8")).autoSend, false);
+  draft = "New draft";
   failInput = true;
   await press(shortcuts.input);
   assert.equal(draft, "New draft");

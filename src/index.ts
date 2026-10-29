@@ -9,10 +9,10 @@ import { TranslationEditor, type BridgeEditorFactory } from "./editor.ts";
 import { latestMessageScope } from "./latest-message.ts";
 import { installSelectionInput } from "./selection-input.ts";
 
-interface Settings { enabled: boolean; source: string; target: string; streaming: boolean; users: boolean }
-const defaults: Settings = { enabled: false, source: "auto", target: "zh-Hans", streaming: true, users: false };
+interface Settings { enabled: boolean; source: string; target: string; streaming: boolean; autoSend: boolean }
+const defaults: Settings = { enabled: false, source: "auto", target: "zh-Hans", streaming: true, autoSend: false };
 const languages = new Set(["zh-Hans", "zh-Hant", "en", "ja", "ko", "fr", "de", "es", "ru", "pt", "ar"]);
-export const shortcuts = { toggle: "alt+a", input: "alt+s" } as const;
+export const shortcuts = { toggle: "alt+a", input: "alt+s", autoSend: "alt+t" } as const;
 
 export function installUndoShortcut() {
   const manager = getKeybindings();
@@ -46,6 +46,7 @@ export function createBridge(pi: ExtensionAPI, options: { directory?: string; tr
   let redrawTimer: ReturnType<typeof setTimeout> | undefined;
   let lastError = "";
   let inputAbort: AbortController | undefined;
+  let autoSending = false;
   let editor: TranslationEditor | undefined;
   let editorFactory: BridgeEditorFactory | undefined;
   let restoreUndo: (() => void) | undefined;
@@ -74,12 +75,14 @@ export function createBridge(pi: ExtensionAPI, options: { directory?: string; tr
     // Only show a compact marker while translation is on; key hints live in the shortcut descriptions.
     const theme = context.ui.theme;
     const fg = (color: string, text: string) => theme?.fg ? theme.fg(color as never, text) : text;
-    context.ui.setStatus("bridge", settings.enabled ? fg("accent", "⇄") + fg("dim", ` ${settings.target}`) : undefined);
+    context.ui.setStatus("bridge", settings.enabled || settings.autoSend
+      ? [settings.enabled ? fg("accent", "⇄") + fg("dim", ` ${settings.target}`) : "", settings.autoSend ? fg("accent", "⇥↵") + fg("dim", " en") : ""].filter(Boolean).join(" ")
+      : undefined);
   }
   function progressMessage() {
     return [
       settings.enabled && engine?.isBusy ? "Translating last reply" : "",
-      inputAbort && !inputAbort.signal.aborted ? "Translating draft to English" : "",
+      inputAbort && !inputAbort.signal.aborted ? (autoSending ? "Translating draft, then sending" : "Translating draft to English") : "",
     ].filter(Boolean).join(" · ") || undefined;
   }
   function updateProgress() {
@@ -95,6 +98,25 @@ export function createBridge(pi: ExtensionAPI, options: { directory?: string; tr
     editorFactory = (tui, theme, keybindings) => {
       const view = new TranslationEditor(tui, theme, keybindings);
       editor = view;
+      // Enter translates the draft and sends it, byte-identical to Alt+S plus submit.
+      view.interceptSubmit = draft => {
+        if (!settings.autoSend || !context) return false;
+        if (!draft.trim() || /^[!/]/.test(draft.trim())) return false;
+        // A send is already translating this draft; ignore the extra Enter.
+        if (autoSending) return true;
+        void submitTranslated(context, draft, view);
+        return true;
+      };
+      // Escape cancels an in-flight auto-send and keeps the draft, so nothing is lost.
+      view.interceptEscape = () => {
+        if (!autoSending || !inputAbort) return false;
+        inputAbort.abort();
+        inputAbort = undefined;
+        autoSending = false;
+        status();
+        view.setTranslation(progressMessage());
+        return true;
+      };
       view.setTranslation(progressMessage());
       return view;
     };
@@ -164,6 +186,7 @@ export function createBridge(pi: ExtensionAPI, options: { directory?: string; tr
   pi.on("session_start", async (_event, ctx) => {
     inputAbort?.abort();
     inputAbort = undefined;
+    autoSending = false;
     restoreEditor();
     closeSelection?.();
     selectionAbort?.abort();
@@ -180,7 +203,7 @@ export function createBridge(pi: ExtensionAPI, options: { directory?: string; tr
     settings = { ...defaults };
     try {
       const saved = JSON.parse(await readFile(join(directory, "settings.json"), "utf8"));
-      for (const key of ["streaming"] as const) if (typeof saved[key] === "boolean") settings[key] = saved[key];
+      for (const key of ["streaming", "autoSend"] as const) if (typeof saved[key] === "boolean") settings[key] = saved[key];
       if (languages.has(saved.target)) settings.target = saved.target;
       if (saved.source === "auto" || languages.has(saved.source)) settings.source = saved.source;
     } catch (error) {
@@ -247,6 +270,7 @@ export function createBridge(pi: ExtensionAPI, options: { directory?: string; tr
     selectionTui = undefined;
     inputAbort?.abort();
     inputAbort = undefined;
+    autoSending = false;
     if (redrawTimer) clearTimeout(redrawTimer);
     redrawTimer = undefined;
     await engine?.stop();
@@ -288,6 +312,22 @@ export function createBridge(pi: ExtensionAPI, options: { directory?: string; tr
   pi.registerShortcut(shortcuts.toggle, {
     description: "bridge: Toggle translation of the last reply",
     handler: async ctx => { if (interactive(ctx)) await change(toggle); },
+  });
+
+  async function toggleAutoSend() {
+    settings.autoSend = !settings.autoSend;
+    await persist();
+    context?.ui.notify(
+      settings.autoSend
+        ? "bridge: Enter now translates the draft to English and sends it"
+        : "bridge: Enter sends the draft as typed; Alt+S translates it in place",
+      "info",
+    );
+  }
+
+  pi.registerShortcut(shortcuts.autoSend, {
+    description: "bridge: Toggle translating the draft on Enter",
+    handler: async ctx => { if (interactive(ctx)) await change(toggleAutoSend); },
   });
 
   async function translateSelection(ctx: ExtensionContext, point: { x: number; y: number }) {
@@ -347,6 +387,7 @@ export function createBridge(pi: ExtensionAPI, options: { directory?: string; tr
     if (!draft.trim()) { ctx.ui.notify("Write a draft, then press Alt+S", "info"); return; }
     const currentEngine = engine;
     inputAbort?.abort();
+    autoSending = false;
     const controller = inputAbort = new AbortController();
     status();
     try {
@@ -365,6 +406,28 @@ export function createBridge(pi: ExtensionAPI, options: { directory?: string; tr
     description: "bridge: Translate draft to English without sending",
     handler: translateDraft,
   });
+
+  // autoSend: Enter translates the draft to English, replaces it, and submits.
+  async function submitTranslated(ctx: ExtensionContext, draft: string, view: TranslationEditor) {
+    const currentEngine = engine;
+    inputAbort?.abort();
+    const controller = inputAbort = new AbortController();
+    autoSending = true;
+    status();
+    try {
+      const protectedText = protect(draft);
+      const result = await translate([protectedText.text], { source: "auto", target: "en" }, controller.signal);
+      if (controller.signal.aborted || engine !== currentEngine) return;
+      if (view.getExpandedText() !== draft) { ctx.ui.notify("Draft changed while translating; press Enter again to send", "warning"); return; }
+      const translated = protectedText.restore(result[0]).trim();
+      // Mirror Editor.submitValue: clear the editor, then hand the text to pi's submit handler.
+      view.setText("");
+      await view.onSubmit?.(translated);
+    } catch (error) { if (!controller.signal.aborted) report(error instanceof Error ? error : new Error(String(error))); }
+    finally {
+      if (inputAbort === controller) { inputAbort = undefined; autoSending = false; status(); }
+    }
+  }
 }
 
 export default function bridge(pi: ExtensionAPI) { createBridge(pi); }
