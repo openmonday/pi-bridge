@@ -116,7 +116,10 @@ export function safeTranslation(text: string): string {
   return text.replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|$))?/g, "")
     .replace(/[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, " ")
     .trim()
-    .replace(/</g, "\\<")
+    // Inline HTML renders as plain text, so only a leading "<" (which could
+    // open an HTML block) needs escaping. Escaping every "<" showed "\<topic>"
+    // wherever backslash escapes are preserved.
+    .replace(/^</, "\\<")
     .replace(/^(\d+)([.)])/, "$1\\$2")
     // Escape only real block openers; inline openers like `**bold**`, `*em*`,
     // `~~del~~` and `code` at the start must keep rendering.

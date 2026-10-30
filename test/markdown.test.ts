@@ -71,3 +71,8 @@ test("leading inline markers in Chinese translations still render", () => {
     assert.ok(inline.tokens.some(t => ["strong", "em", "del", "codespan"].includes(t.type)), text);
   }
 });
+
+test("does not escape angle brackets inside translated text", () => {
+  assert.equal(safeTranslation("路径 notes/<topic>/ 下"), "路径 notes/<topic>/ 下");
+  assert.equal(Lexer.lex(bilingual("Hello", () => "<div>x</div>")).filter(t => t.type === "html").length, 0);
+});
