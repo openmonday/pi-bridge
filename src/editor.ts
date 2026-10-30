@@ -55,9 +55,21 @@ export class TranslationEditor extends CustomEditor {
   private claimsSubmit(data: string): boolean {
     if (this.disableSubmit || this.isShowingAutocomplete()) return false;
     const kb = getKeybindings();
+    if (this.insertsNewLine(data, kb)) return false;
     if (!kb.matches(data, "tui.input.submit")) return false;
     if (this.backslashNewline(data, kb)) return false;
     return this.getExpandedText().trim().length > 0;
+  }
+
+  // Editor checks newline keys before submit, so Shift+Enter (and the
+  // terminal-specific newline sequences) must never be claimed as a submit.
+  private insertsNewLine(data: string, kb: ReturnType<typeof getKeybindings>): boolean {
+    return kb.matches(data, "tui.input.newLine") ||
+      (data.charCodeAt(0) === 10 && data.length > 1) ||
+      data === "\x1b\r" ||
+      data === "\x1b[13;2~" ||
+      (data.length > 1 && data.includes("\x1b") && data.includes("\r")) ||
+      data === "\n";
   }
 
   // Same workaround as Editor: with Shift+Enter bound to newline, a trailing
